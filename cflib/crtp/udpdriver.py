@@ -42,6 +42,9 @@ __all__ = ['UdpDriver']
 logger = logging.getLogger(__name__)
 
 
+ping_header = "p"
+data_header = "d"
+
 class UdpDriver(CRTPDriver):
 
     def __init__(self):
@@ -63,7 +66,7 @@ class UdpDriver(CRTPDriver):
         self._thread = _UdpDriverThread(self.socket, self.in_queue, linkErrorCallback)
         self._thread.start()
 
-        self.socket.send(b'\xF3')
+        self.send_raw_packet(b'\xF3')
 
     def receive_packet(self, time=0):
         if time == 0:
@@ -84,14 +87,21 @@ class UdpDriver(CRTPDriver):
 
     def send_packet(self, pk):
         raw = (pk.header,) + struct.unpack('B' * len(pk.data), pk.data)
+        # raw = struct.unpack('B', data_header.encode('utf-8')) + (pk.header,) + struct.unpack('B' * len(pk.data), pk.data)
         data = struct.pack('B' * len(raw), *raw)
-        self.socket.send(data)
+        self.send_raw_packet(data)
+    
+    def send_ping_packet(self):
+        self.socket.send(ping_header.encode('utf-8'))
+    
+    def send_raw_packet(self, pk):
+        self.socket.send(pk)
 
     def close(self):
         """ Close the link. """
         # Stop the comm thread
         self._thread.stop()
-        self.socket.send(b'\xF4')
+        self.send_raw_packet(b'\xF4')
         try:
             self.socket.close()
             self.socket = None
@@ -105,21 +115,27 @@ class UdpDriver(CRTPDriver):
         return 'udp'
 
     def scan_interface(self, address):
-        # try:
-        #     socket.inet_aton(address)
-        #     # s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        #     port = '19850'
-        #     # print(f'Attempting connection on {address}:{port}')
-        #     # s.connect((address, int(port)))
-        #     # print('connected')
-        #     # s.shutdown(2)
-        # except socket.error:
-        #     uri = []
-        #     print('UDP socket not found')
-        # else:
-        #     uri = [['udp://' + address + ':' + port, '']]
-        uri = [['udp://0.0.0.0:19850', '']]
-        return uri
+        uris = []
+        for port in range(19850,19854):
+            try:
+                address = '0.0.0.0'
+                print(f'Attempting connection on {address}:{port}')
+                uri = 'udp://' + address + ':' + str(port)
+                parse = urlparse(uri)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                addr = (parse.hostname, parse.port)
+                sock.connect(addr)
+                # sock.send(ping_header.encode('utf-8'))
+                # packet = sock.recv(0)
+                print('Got response from {address}:{port}'.format(address=address, port=port))
+                sock.shutdown(2)
+                uris += [[uri, '']]
+            except socket.error as e:
+                uri = []
+                # print('UDP socket not found')
+                print(e)
+        # uri = [['udp://0.0.0.0:19850', '']]
+        return uris
     
 class _UdpDriverThread(threading.Thread):
     """
@@ -151,6 +167,7 @@ class _UdpDriverThread(threading.Thread):
                 packet = self._socket.recv(1024)
                 data = struct.unpack('B' * len(packet), packet)
                 if len(data) > 0:
+                    # if data[0] == data_header:
                     pk = CRTPPacket(header=data[0], 
                                     data=data[1:])
                     self._in_queue.put(pk)
